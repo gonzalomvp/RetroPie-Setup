@@ -31,7 +31,7 @@ function _get_connect_mode() {
 
 function depends_bluetooth() {
     local depends=(bluetooth python-dbus python-gobject)
-    if isPlatform "rpi3" && hasPackage raspberrypi-bootloader && [[ "$__raspbian_ver" -ge "8" ]]; then
+    if [[ "$__os_id" == "Raspbian" ]]; then
         depends+=(pi-bluetooth raspberrypi-sys-mods)
     fi
     getDepends "${depends[@]}"
@@ -41,7 +41,7 @@ function get_script_bluetooth() {
     name="$1"
     if ! which "$name"; then
         [[ "$name" == "bluez-test-input" ]] && name="bluez-test-device"
-        name="$scriptdir/scriptmodules/supplementary/$md_id/$name"
+        name="$md_data/$name"
     fi
     echo "$name"
 }
@@ -56,7 +56,7 @@ function list_available_bluetooth() {
         mkfifo "$fifo"
         exec 3<>"$fifo"
         local line
-        while read -r -n12 line; do
+        while read -r line; do
             if [[ "$line" == *"[bluetooth]"* ]]; then
                 echo "scan on" >&3
                 read -r line
@@ -86,8 +86,8 @@ function list_registered_bluetooth() {
     local mac_address
     local device_name
     while read line; do
-        mac_address=$(echo $line | sed 's/ /,/g' | cut -d, -f1)
-        device_name=$(echo $line | sed -e 's/'"$mac_address"' //g')
+        mac_address="$(echo "$line" | sed 's/ /,/g' | cut -d, -f1)"
+        device_name="$(echo "$line" | sed 's/'"$mac_address"' //g')"
         echo -e "$mac_address\n$device_name"
     done < <($(get_script_bluetooth bluez-test-device) list)
 }
@@ -100,7 +100,7 @@ function display_active_and_registered_bluetooth() {
     [[ -z "$registered" ]] && registered="There are no registered devices"
 
     if [[ "$(hcitool con)" != "Connections:" ]]; then
-        active="$(hcitool con 2>&1 | sed -e 1d)"
+        active="$(hcitool con 2>&1 | sed 1d)"
     else
         active="There are no active connections"
     fi
@@ -197,12 +197,12 @@ function register_bluetooth() {
                 dialog --backtitle "$__backtitle" --infobox "Please enter pin $pin on your bluetooth device" 10 60
                 echo "$pin" >&3
                 # read "Enter PIN Code:"
-                read -n 15 line
+                read line
                 ;;
             "RequestConfirmation"*)
                 # read "Confirm passkey (yes/no): "
                 echo "yes" >&3
-                read -n 26 line
+                read line
                 skip_connect=1
                 break
                 ;;
@@ -310,11 +310,11 @@ function connect_mode_bluetooth() {
     local connect_mode="$(_get_connect_mode)"
 
     local cmd=(dialog --backtitle "$__backtitle" --default-item "$connect_mode" --menu "Choose a connect mode" 22 76 16)
-    echo $__ini_cfg_file
+
     local options=(
-        default "Bluetooth stack default behaviour"
+        default "Bluetooth stack default behaviour (recommended)"
         boot "Connect to devices once at boot"
-        background "Connect to devices in the background"
+        background "Force connecting to devices in the background"
     )
 
     local choice=$("${cmd[@]}" "${options[@]}" 2>&1 >/dev/tty)
@@ -351,7 +351,7 @@ _EOF_
 }
 
 function gui_bluetooth() {
-    addAutoConf "8bitdo_hack" 1
+    addAutoConf "8bitdo_hack" 0
 
     while true; do
         local connect_mode="$(_get_connect_mode)"
@@ -377,7 +377,9 @@ function gui_bluetooth() {
 
         local choice=$("${cmd[@]}" "${options[@]}" 2>&1 >/dev/tty)
         if [[ -n "$choice" ]]; then
-            case $choice in
+            # temporarily restore Bluetooth stack (if needed)
+            service sixad status >/dev/null && sixad -r
+            case "$choice" in
                 R)
                     register_bluetooth
                     ;;
@@ -402,6 +404,8 @@ function gui_bluetooth() {
                     ;;
             esac
         else
+            # restart sixad (if running)
+            service sixad status >/dev/null && service sixad restart && printMsgs "dialog" "NOTICE: The ps3controller driver was temporarily interrupted in order to allow compatibility with standard Bluetooth peripherals. Please re-pair your Dual Shock controller to continue (or disregard this message if currently using another controller)."
             break
         fi
     done
